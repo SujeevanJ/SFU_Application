@@ -1,0 +1,402 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Global Video Call</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #111827;
+      color: #f9fafb;
+    }
+
+    header {
+      padding: 18px 24px;
+      border-bottom: 1px solid #374151;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 21px;
+    }
+
+    #status {
+      color: #d1d5db;
+      font-size: 14px;
+    }
+
+    main {
+      max-width: 1200px;
+      margin: auto;
+      padding: 24px;
+    }
+
+    #videos {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+
+    .tile {
+      position: relative;
+      min-height: 220px;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 12px;
+    }
+
+    .tile video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .tile audio {
+      display: none;
+    }
+
+    .participant-label {
+      position: absolute;
+      left: 10px;
+      bottom: 10px;
+      padding: 6px 9px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.65);
+      font-size: 13px;
+    }
+
+    .placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: #d1d5db;
+      font-size: 15px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    button {
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      color: white;
+      background: #374151;
+      font-size: 14px;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    #joinButton {
+      background: #2563eb;
+    }
+
+    #leaveButton {
+      background: #b91c1c;
+    }
+
+    #message {
+      min-height: 24px;
+      margin-top: 16px;
+      text-align: center;
+      color: #fca5a5;
+    }
+
+    @media (max-width: 600px) {
+      main {
+        padding: 12px;
+      }
+
+      #videos {
+        grid-template-columns: 1fr;
+      }
+
+      .tile {
+        min-height: 220px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Global Video Call- (DT BATCH)</h1>
+    <div id="status">Not connected</div>
+  </header>
+
+  <main>
+    <div id="videos"></div>
+
+    <div class="controls">
+      <button id="joinButton">Join Call</button>
+      <button id="micButton" disabled>Mute Mic</button>
+      <button id="cameraButton" disabled>Turn Camera Off</button>
+      <button id="leaveButton" disabled>Leave Call</button>
+    </div>
+
+    <div id="message" role="status"></div>
+  </main>
+
+  <script>
+    const {
+      Room,
+      RoomEvent,
+      Track,
+    } = LivekitClient;
+
+    const videos = document.getElementById("videos");
+    const status = document.getElementById("status");
+    const message = document.getElementById("message");
+
+    const joinButton = document.getElementById("joinButton");
+    const micButton = document.getElementById("micButton");
+    const cameraButton = document.getElementById("cameraButton");
+    const leaveButton = document.getElementById("leaveButton");
+
+    let room = null;
+    let micEnabled = true;
+    let cameraEnabled = true;
+
+    // Each participant gets a tile containing their media.
+    function createTile(identity, isLocal = false) {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.id = `participant-${identity}`;
+
+      const placeholder = document.createElement("div");
+      placeholder.className = "placeholder";
+      placeholder.textContent = "Camera is off";
+      tile.appendChild(placeholder);
+
+      const label = document.createElement("div");
+      label.className = "participant-label";
+      label.textContent = isLocal ? "You" : "Guest";
+      tile.appendChild(label);
+
+      videos.appendChild(tile);
+      return tile;
+    }
+
+    function getTile(participant) {
+      const tileId = `participant-${participant.identity}`;
+
+      return document.getElementById(tileId)
+        || createTile(participant.identity, participant === room.localParticipant);
+    }
+
+    function removeTile(identity) {
+      document.getElementById(`participant-${identity}`)?.remove();
+    }
+
+    function attachTrack(track, participant) {
+      const tile = getTile(participant);
+      const mediaElement = track.attach();
+
+      mediaElement.dataset.trackSid = track.sid;
+
+      if (track.kind === Track.Kind.Video) {
+        mediaElement.autoplay = true;
+        mediaElement.playsInline = true;
+        tile.querySelector(".placeholder")?.remove();
+        tile.querySelector("video")?.remove();
+        tile.prepend(mediaElement);
+      } else if (track.kind === Track.Kind.Audio) {
+        mediaElement.autoplay = true;
+        tile.appendChild(mediaElement);
+      }
+    }
+
+    function detachTrack(track) {
+      track.detach().forEach((element) => element.remove());
+    }
+
+    function syncParticipant(participant) {
+      getTile(participant);
+
+      participant.trackPublications.forEach((publication) => {
+        if (publication.track) {
+          attachTrack(publication.track, participant);
+        }
+      });
+    }
+
+    function updateControls(connected) {
+      joinButton.disabled = connected;
+      micButton.disabled = !connected;
+      cameraButton.disabled = !connected;
+      leaveButton.disabled = !connected;
+    }
+
+    async function joinCall() {
+      joinButton.disabled = true;
+      message.textContent = "";
+      status.textContent = "Connecting...";
+
+      try {
+        // Ask our backend for a short-lived LiveKit token.
+        const response = await fetch("/api/token", {
+          method: "POST",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Could not get a call token.");
+        }
+
+        room = new Room();
+
+        // Handle other participants' video/audio tracks.
+        room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          attachTrack(track, participant);
+        });
+
+        room.on(RoomEvent.TrackUnsubscribed, (track) => {
+          detachTrack(track);
+        });
+
+        room.on(RoomEvent.ParticipantConnected, (participant) => {
+          getTile(participant);
+        });
+
+        room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+          removeTile(participant.identity);
+        });
+
+        room.on(RoomEvent.TrackMuted, (publication, participant) => {
+          if (publication.kind === Track.Kind.Video) {
+            const tile = getTile(participant);
+            if (!tile.querySelector("video")) {
+              if (!tile.querySelector(".placeholder")) {
+                const placeholder = document.createElement("div");
+                placeholder.className = "placeholder";
+                placeholder.textContent = "Camera is off";
+                tile.appendChild(placeholder);
+              }
+            }
+          }
+        });
+
+        room.on(RoomEvent.TrackUnmuted, (publication, participant) => {
+          if (publication.kind === Track.Kind.Video && publication.track) {
+            attachTrack(publication.track, participant);
+          }
+        });
+
+        room.on(RoomEvent.Disconnected, () => {
+          status.textContent = "Disconnected";
+        });
+
+        // Connect directly from the browser to LiveKit Cloud.
+        await room.connect(data.serverUrl, data.participantToken);
+
+        // Request camera and microphone access and publish them.
+        await room.localParticipant.enableCameraAndMicrophone();
+
+        getTile(room.localParticipant);
+        syncParticipant(room.localParticipant);
+
+        room.remoteParticipants.forEach(syncParticipant);
+
+        micEnabled = true;
+        cameraEnabled = true;
+
+        micButton.textContent = "Mute Mic";
+        cameraButton.textContent = "Turn Camera Off";
+
+        status.textContent = "Connected";
+        updateControls(true);
+      } catch (error) {
+        console.error(error);
+        message.textContent =
+          error.message || "Unable to join. Check permissions and credentials.";
+        status.textContent = "Not connected";
+
+        if (room) {
+          await room.disconnect().catch(() => {});
+          room = null;
+        }
+
+        videos.replaceChildren();
+        updateControls(false);
+      }
+    }
+
+    async function toggleMic() {
+      if (!room) return;
+
+      micEnabled = !micEnabled;
+      await room.localParticipant.setMicrophoneEnabled(micEnabled);
+      micButton.textContent = micEnabled ? "Mute Mic" : "Unmute Mic";
+    }
+
+    async function toggleCamera() {
+      if (!room) return;
+
+      cameraEnabled = !cameraEnabled;
+      await room.localParticipant.setCameraEnabled(cameraEnabled);
+      cameraButton.textContent = cameraEnabled
+        ? "Turn Camera Off"
+        : "Turn Camera On";
+
+      if (!cameraEnabled) {
+        const tile = getTile(room.localParticipant);
+        if (!tile.querySelector(".placeholder")) {
+          const placeholder = document.createElement("div");
+          placeholder.className = "placeholder";
+          placeholder.textContent = "Camera is off";
+          tile.appendChild(placeholder);
+        }
+      }
+    }
+
+    async function leaveCall() {
+      if (room) {
+        await room.disconnect();
+        room = null;
+      }
+
+      videos.replaceChildren();
+      status.textContent = "Not connected";
+      message.textContent = "";
+
+      micEnabled = true;
+      cameraEnabled = true;
+
+      updateControls(false);
+    }
+
+    joinButton.addEventListener("click", joinCall);
+    micButton.addEventListener("click", toggleMic);
+    cameraButton.addEventListener("click", toggleCamera);
+    leaveButton.addEventListener("click", leaveCall);
+  </script>
+</body>
+</html>
